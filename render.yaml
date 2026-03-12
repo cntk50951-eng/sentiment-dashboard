@@ -1,12 +1,14 @@
 # Render.com Deployment Configuration
-# Using Docker for full control
+# Using Python 3 runtime
 
 services:
   - type: web
     name: sentiment-dashboard-api
-    runtime: docker
+    runtime: python
     plan: starter
-    dockerfilePath: ./Dockerfile
+    buildCommand: pip install -r requirements.txt
+    startCommand: uvicorn app.main:app --host 0.0.0.0 --port $PORT
+    pythonVersion: "3.10.0"
     envVars:
       - key: NEWS_API_KEY
         sync: false
