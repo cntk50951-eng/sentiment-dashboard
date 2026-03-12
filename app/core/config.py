@@ -8,8 +8,7 @@ All environment variables are validated and typed.
 from functools import lru_cache
 from typing import List, Optional
 
-from pydantic import Field, validator
-from pydantic_settings import BaseSettings
+from pydantic import BaseSettings, Field, validator
 
 
 class Settings(BaseSettings):
@@ -58,21 +57,6 @@ class Settings(BaseSettings):
     # Logging
     LOG_LEVEL: str = Field(default="INFO", description="Logging level")
     LOG_FORMAT: str = Field(default="json", description="Log format (json/text)")
-    
-    @validator("CORS_ORIGINS", pre=True)
-    def parse_cors_origins(cls, v):
-        """Parse CORS origins from comma-separated string."""
-        if isinstance(v, str):
-            return [origin.strip() for origin in v.split(",")]
-        return v
-    
-    @validator("ENVIRONMENT")
-    def validate_environment(cls, v):
-        """Validate environment value."""
-        allowed = ["development", "staging", "production", "dev", "prod"]
-        if v.lower() not in allowed:
-            raise ValueError(f"ENVIRONMENT must be one of {allowed}")
-        return v.lower()
     
     class Config:
         env_file = ".env"
