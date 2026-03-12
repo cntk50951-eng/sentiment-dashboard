@@ -15,53 +15,53 @@ class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
     
     # Application
-    APP_NAME: str = Field(default="Sentiment Dashboard", description="Application name")
-    APP_VERSION: str = Field(default="1.0.0", description="Application version")
-    DEBUG: bool = Field(default=False, description="Debug mode")
-    ENVIRONMENT: str = Field(default="production", description="Environment (dev/staging/prod)")
+    app_name: str = "Sentiment Dashboard"
+    app_version: str = "1.0.0"
+    debug: bool = False
+    environment: str = "production"
     
     # Server
-    HOST: str = Field(default="0.0.0.0", description="Server host")
-    PORT: int = Field(default=8000, description="Server port")
-    WORKERS: int = Field(default=1, description="Number of worker processes")
+    host: str = "0.0.0.0"
+    port: int = 8000
+    workers: int = 1
     
     # CORS
-    CORS_ORIGINS: List[str] = Field(default=["*"], description="Allowed CORS origins")
+    cors_origins: List[str] = ["*"]
     
     # Security
-    SECRET_KEY: str = Field(default="", description="Secret key for JWT")
-    ACCESS_TOKEN_EXPIRE_MINUTES: int = Field(default=30, description="Token expiration time")
+    secret_key: str = ""
+    access_token_expire_minutes: int = 30
     
     # API Keys - Required
-    NEWS_API_KEY: str = Field(..., description="NewsAPI key (required)")
-    MINIMAX_API_KEY: str = Field(..., description="Minimax AI API key (required)")
+    news_api_key: str = ""
+    minimax_api_key: str = ""
     
     # API Keys - Optional
-    REDDIT_CLIENT_ID: Optional[str] = Field(default=None, description="Reddit API client ID")
-    REDDIT_CLIENT_SECRET: Optional[str] = Field(default=None, description="Reddit API client secret")
-    REDDIT_USERNAME: Optional[str] = Field(default=None, description="Reddit username")
-    REDDIT_PASSWORD: Optional[str] = Field(default=None, description="Reddit password")
+    reddit_client_id: Optional[str] = None
+    reddit_client_secret: Optional[str] = None
+    reddit_username: Optional[str] = None
+    reddit_password: Optional[str] = None
     
-    ALPACA_API_KEY: Optional[str] = Field(default=None, description="Alpaca API key")
-    ALPACA_SECRET_KEY: Optional[str] = Field(default=None, description="Alpaca secret key")
+    alpaca_api_key: Optional[str] = None
+    alpaca_secret_key: Optional[str] = None
     
-    TWITTER_BEARER_TOKEN: Optional[str] = Field(default=None, description="Twitter Bearer token")
+    twitter_bearer_token: Optional[str] = None
     
     # Cache
-    CACHE_TTL: int = Field(default=300, description="Cache TTL in seconds")
-    REDIS_URL: Optional[str] = Field(default=None, description="Redis connection URL")
+    cache_ttl: int = 300
+    redis_url: Optional[str] = None
     
     # Rate Limiting
-    RATE_LIMIT_REQUESTS: int = Field(default=60, description="Rate limit requests per minute")
+    rate_limit_requests: int = 60
     
     # Logging
-    LOG_LEVEL: str = Field(default="INFO", description="Logging level")
-    LOG_FORMAT: str = Field(default="json", description="Log format (json/text)")
+    log_level: str = "INFO"
+    log_format: str = "json"
     
     class Config:
         env_file = ".env"
         env_file_encoding = "utf-8"
-        case_sensitive = True
+        case_sensitive = False
 
 
 @lru_cache()
