@@ -9,6 +9,11 @@ from pydantic import BaseModel
 from typing import List, Optional
 import asyncio
 from datetime import datetime
+import os
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 from data_sources.news_api import NewsAPIClient
 from data_sources.reddit_client import RedditClient

@@ -6,6 +6,7 @@ AI Agent Analysis Team
 from typing import List, Dict, Optional
 import json
 from datetime import datetime
+import os
 
 class AnalysisTeam:
     """
@@ -13,8 +14,8 @@ class AnalysisTeam:
     包含多個專業 Agent，協作完成複雜分析任務
     """
     
-    def __init__(self, api_key: str = "sk-cp-MLTikfWSkQ0x2jepKdyGY2ZwLqmeQUyo5pp2Qp5R0AEOgcxxwegozaB9m7GnYePnZZW6LTb1oWjbazRIRBuvNj8_D66-2qrG8H_oA2ebWYhE5LZBkYy7NxQ"):
-        self.api_key = api_key
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key or os.getenv("MINIMAX_API_KEY", "")
         self.base_url = "https://api.minimaxi.chat/v1/text/chatcompletion_v2"
         
         # Agent 配置

@@ -7,10 +7,11 @@ import requests
 import asyncio
 from typing import List, Dict
 from datetime import datetime
+import os
 
 class NewsAPIClient:
-    def __init__(self, api_key: str = "949e672e9aae4589add2e409f5a2467a"):
-        self.api_key = api_key
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key or os.getenv("NEWS_API_KEY", "")
         self.base_url = "https://newsapi.org/v2"
         
     async def get_hot_topics(self, category: str = None, limit: int = 20) -> List[Dict]:
