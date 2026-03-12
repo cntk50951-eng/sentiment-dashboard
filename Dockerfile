@@ -2,7 +2,13 @@
 # Multi-stage build for optimized image size
 
 # Stage 1: Build stage
-FROM python:3.11-slim as builder
+FROM python:3.11.6-slim as builder
+
+# Prevent Python from writing pyc files
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONUNBUFFERED=1
+ENV PIP_NO_CACHE_DIR=1
+ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -25,7 +31,7 @@ RUN pip install --upgrade pip && \
     pip install -r requirements.txt
 
 # Stage 2: Production stage
-FROM python:3.11-slim
+FROM python:3.11.6-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1 \
