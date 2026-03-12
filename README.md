@@ -45,3 +45,4 @@ sentiment-dashboard/
 ## 📝 License
 
 MIT
+# Force rebuild
