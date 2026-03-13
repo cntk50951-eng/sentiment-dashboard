@@ -1,161 +1,293 @@
 """
 Reddit JSON API Client
-無需認證，公開訪問
+無需認證，公開訪問，增強版
 """
 
-import requests
+import asyncio
 import re
-from typing import List, Dict
+from typing import List, Dict, Any, Optional
 from datetime import datetime
 
-class RedditClient:
-    def __init__(self):
-        self.headers = {
-            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36"
-        }
-        self.subreddits = [
-            "wallstreetbets",
-            "investing",
-            "stocks",
-            "StockMarket",
-            "CryptoCurrency",
-            "Bitcoin"
-        ]
+import aiohttp
+
+from data_sources.base_client import DataSourceClient, DataSourceError
+from utils.decorators import cache, timing
+from utils.metrics import track_performance
+
+
+class RedditClient(DataSourceClient):
+    """
+    Enhanced Reddit client with circuit breaker and caching.
     
-    async def get_hot_posts(self, limit: int = 10) -> List[Dict]:
-        """獲取多個 subreddit 的熱門帖子"""
+    Features:
+    - Circuit breaker protection
+    - Connection pooling
+    - Intelligent caching
+    - Rate limiting
+    - Subreddit rotation
+    """
+    
+    # Topic keywords for classification
+    TOPIC_KEYWORDS = {
+        "AI": ["ai", "artificial intelligence", "chatgpt", "machine learning", "llm", "openai"],
+        "Crypto": ["crypto", "bitcoin", "btc", "ethereum", "eth", "blockchain", "defi", "nft", "web3", "altcoin"],
+        "Energy": ["oil", "energy", "gas", "petroleum", "renewable", "solar", "wind", "opec", "crude"],
+        "Tech": ["tech", "technology", "software", "cloud", "saas", "semiconductor", "chip", "ai"],
+        "Finance": ["fed", "interest rate", "inflation", "economy", "recession", "gdp", "fomc", "cpi", "ppi"],
+        "Meme": ["meme", "yolo", "moon", "rocket", "tendies", "diamond hands", "paper hands"],
+        "Earnings": ["earnings", "revenue", "profit", "quarterly", "guidance", "beat", "miss"],
+        "EV": ["tesla", "ev", "electric vehicle", "battery", "rivian", "lucid", "nio"],
+        "Semiconductor": ["chip", "semiconductor", "nvidia", "intel", "amd", "tsmc"]
+    }
+    
+    # Default subreddits to monitor
+    DEFAULT_SUBREDDITS = [
+        "wallstreetbets",
+        "investing",
+        "stocks",
+        "StockMarket",
+        "CryptoCurrency",
+        "Bitcoin",
+        "ethereum",
+        "wallstreetbetsOGs",
+        "SecurityAnalysis"
+    ]
+    
+    def __init__(self, subreddits: Optional[List[str]] = None):
+        super().__init__(
+            name="reddit",
+            base_url="https://www.reddit.com",
+            api_key=None,  # Reddit JSON API doesn't require auth
+            circuit_breaker_config={
+                "failure_threshold": 5,
+                "recovery_timeout": 60.0
+            }
+        )
         
+        self.subreddits = subreddits or self.DEFAULT_SUBREDDITS
+        self.headers = {
+            "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+            "Accept": "application/json"
+        }
+        self._rate_limit_delay = 1.0  # Seconds between requests
+        self._last_request_time = 0
+    
+    @track_performance("reddit_hot_posts")
+    @cache(ttl=120.0)  # 2 minutes cache
+    async def get_hot_posts(
+        self,
+        limit: int = 10,
+        subreddits: Optional[List[str]] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        獲取多個 subreddit 的熱門帖子。
+        
+        Args:
+            limit: Total posts to return
+            subreddits: Specific subreddits to query (uses default if None)
+            
+        Returns:
+            List of hot posts sorted by engagement
+        """
+        target_subreddits = subreddits or self.subreddits
         all_posts = []
+        errors = []
         
-        for subreddit in self.subreddits:
+        # Calculate limit per subreddit
+        per_subreddit = max(limit // len(target_subreddits), 5)
+        
+        for subreddit in target_subreddits:
             try:
-                url = f"https://www.reddit.com/r/{subreddit}/hot.json"
-                params = {"limit": limit}
+                posts = await self._fetch_subreddit_posts(subreddit, per_subreddit)
+                all_posts.extend(posts)
                 
-                response = requests.get(
-                    url, 
-                    headers=self.headers, 
-                    params=params, 
-                    timeout=10
-                )
+                # Rate limiting between requests
+                await asyncio.sleep(self._rate_limit_delay)
                 
-                if response.status_code == 200:
-                    data = response.json()
-                    posts = data.get("data", {}).get("children", [])
-                    
-                    for post in posts:
-                        post_data = post.get("data", {})
-                        
-                        processed_post = {
-                            "id": post_data.get("id"),
-                            "title": post_data.get("title"),
-                            "score": post_data.get("score", 0),
-                            "comments": post_data.get("num_comments", 0),
-                            "subreddit": subreddit,
-                            "author": post_data.get("author"),
-                            "url": f"https://reddit.com{post_data.get('permalink', '')}",
-                            "created_at": datetime.fromtimestamp(
-                                post_data.get("created_utc", 0)
-                            ).isoformat(),
-                            "topics": self._extract_topics(post_data.get("title", "")),
-                            "related_tickers": self._extract_tickers(
-                                post_data.get("title", "")
-                            ),
-                            "data_source": "reddit"
-                        }
-                        
-                        all_posts.append(processed_post)
-                        
             except Exception as e:
-                print(f"Reddit Error for r/{subreddit}: {e}")
+                errors.append(f"r/{subreddit}: {str(e)}")
                 continue
         
-        # 按熱度排序
-        all_posts.sort(key=lambda x: x["score"], reverse=True)
+        if not all_posts and errors:
+            raise DataSourceError(
+                f"Failed to fetch from all subreddits: {'; '.join(errors[:3])}",
+                "reddit"
+            )
+        
+        # Sort by engagement (score + comments)
+        all_posts.sort(
+            key=lambda x: x.get("engagement_score", 0),
+            reverse=True
+        )
+        
         return all_posts[:limit]
     
-    async def get_subreddit_posts(self, subreddit: str, limit: int = 10) -> List[Dict]:
-        """獲取特定 subreddit 的帖子"""
+    async def _fetch_subreddit_posts(
+        self,
+        subreddit: str,
+        limit: int
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch posts from a specific subreddit.
+        
+        Args:
+            subreddit: Subreddit name
+            limit: Number of posts to fetch
+            
+        Returns:
+            List of processed posts
+        """
+        url = f"{self.base_url}/r/{subreddit}/hot.json"
+        params = {"limit": min(limit, 100)}
         
         try:
-            url = f"https://www.reddit.com/r/{subreddit}/hot.json"
-            params = {"limit": limit}
-            
-            response = requests.get(
-                url, 
-                headers=self.headers, 
-                params=params, 
-                timeout=10
-            )
-            
-            if response.status_code == 200:
-                data = response.json()
+            async with self._pool.request(
+                "GET",
+                url,
+                params=params,
+                headers=self.headers
+            ) as response:
+                
+                if response.status == 429:
+                    raise DataSourceError(
+                        "Rate limited by Reddit",
+                        "reddit",
+                        429
+                    )
+                elif response.status == 404:
+                    raise DataSourceError(
+                        f"Subreddit r/{subreddit} not found",
+                        "reddit",
+                        404
+                    )
+                elif response.status != 200:
+                    raise DataSourceError(
+                        f"Reddit returned status {response.status}",
+                        "reddit",
+                        response.status
+                    )
+                
+                data = await response.json()
                 posts = data.get("data", {}).get("children", [])
                 
-                return [
-                    {
-                        "id": post["data"].get("id"),
-                        "title": post["data"].get("title"),
-                        "score": post["data"].get("score", 0),
-                        "comments": post["data"].get("num_comments", 0),
-                        "subreddit": subreddit,
-                        "author": post["data"].get("author"),
-                        "url": f"https://reddit.com{post['data'].get('permalink', '')}",
-                        "topics": self._extract_topics(post["data"].get("title", "")),
-                        "related_tickers": self._extract_tickers(
-                            post["data"].get("title", "")
-                        ),
-                        "data_source": "reddit"
-                    }
-                    for post in posts
-                ]
-            else:
-                return []
+                return self._process_posts(posts, subreddit)
                 
+        except aiohttp.ClientError as e:
+            raise DataSourceError(f"Network error: {str(e)}", "reddit")
+    
+    def _process_posts(
+        self,
+        posts: List[Dict],
+        subreddit: str
+    ) -> List[Dict[str, Any]]:
+        """
+        Process Reddit posts into standardized format.
+        
+        Args:
+            posts: Raw Reddit posts
+            subreddit: Source subreddit
+            
+        Returns:
+            Processed posts
+        """
+        processed = []
+        
+        for post in posts:
+            post_data = post.get("data", {})
+            
+            # Skip stickied/pinned posts
+            if post_data.get("stickied", False):
+                continue
+            
+            title = post_data.get("title", "")
+            score = post_data.get("score", 0)
+            comments = post_data.get("num_comments", 0)
+            
+            # Calculate engagement score
+            engagement = score + (comments * 2)  # Comments weighted higher
+            
+            # Extract metadata
+            topics = self._extract_topics(title, self.TOPIC_KEYWORDS)
+            tickers = self._extract_tickers(title)
+            sentiment = self._estimate_sentiment(title)
+            
+            created_utc = post_data.get("created_utc", 0)
+            
+            processed.append({
+                "id": f"reddit_{post_data.get('id', '')}",
+                "title": title,
+                "score": score,
+                "comments": comments,
+                "engagement_score": engagement,
+                "upvote_ratio": post_data.get("upvote_ratio", 0.5),
+                "subreddit": subreddit,
+                "author": post_data.get("author"),
+                "url": f"https://reddit.com{post_data.get('permalink', '')}",
+                "created_at": datetime.fromtimestamp(created_utc).isoformat() if created_utc else None,
+                "topics": topics,
+                "related_tickers": tickers,
+                "sentiment": sentiment,
+                "data_source": "reddit",
+                "collected_at": datetime.now().isoformat()
+            })
+        
+        return processed
+    
+    def _estimate_sentiment(self, title: str) -> float:
+        """
+        Estimate sentiment from post title.
+        
+        Args:
+            title: Post title
+            
+        Returns:
+            Sentiment score (-1 to 1)
+        """
+        title_lower = title.lower()
+        
+        # Positive indicators
+        positive = [
+            "bull", "bullish", "buy", "moon", "rocket", "gain", "profit",
+            "up", "rise", "surge", "jump", "rally", "boom", "growth",
+            "strong", "beat", "breakout", " ATH", "all time high"
+        ]
+        
+        # Negative indicators
+        negative = [
+            "bear", "bearish", "sell", "crash", "dump", "loss", "down",
+            "fall", "drop", "decline", "bearish", "weak", "miss",
+            "panic", "fear", "bear market", "correction"
+        ]
+        
+        pos_count = sum(1 for p in positive if p in title_lower)
+        neg_count = sum(1 for n in negative if n in title_lower)
+        
+        total = pos_count + neg_count
+        if total == 0:
+            return 0.0
+        
+        return (pos_count - neg_count) / total
+    
+    async def health_check(self) -> Dict[str, Any]:
+        """
+        Check Reddit API health.
+        
+        Returns:
+            Health status dictionary
+        """
+        try:
+            start = datetime.now()
+            await self._fetch_subreddit_posts("wallstreetbets", 1)
+            latency = (datetime.now() - start).total_seconds()
+            
+            return {
+                "status": "healthy",
+                "latency_ms": round(latency * 1000, 2),
+                "subreddits_monitored": len(self.subreddits)
+            }
         except Exception as e:
-            print(f"Reddit Error: {e}")
-            return []
-    
-    def _extract_topics(self, title: str) -> List[str]:
-        """提取話題主題"""
-        
-        title_lower = title.lower()
-        topics = []
-        
-        topic_keywords = {
-            "AI": ["ai", "artificial intelligence", "chatgpt", "machine learning"],
-            "Crypto": ["crypto", "bitcoin", "btc", "ethereum", "eth"],
-            "Energy": ["oil", "energy", "gas", "petroleum"],
-            "EV": ["tesla", "ev", "electric vehicle"],
-            "Tech": ["tech", "technology", "google", "apple", "microsoft"],
-            "Finance": ["fed", "interest rate", "inflation", "cpi"],
-            "Meme": ["meme", "yolo", "moon", "rocket"],
-            "Earnings": ["earnings", "revenue", "profit", "quarterly"]
-        }
-        
-        for topic, keywords in topic_keywords.items():
-            if any(kw in title_lower for kw in keywords):
-                topics.append(topic)
-        
-        return topics
-    
-    def _extract_tickers(self, title: str) -> List[str]:
-        """提取股票代碼"""
-        
-        # $XXX 格式
-        tickers = re.findall(r'\$([A-Z]{1,5})', title)
-        
-        # 常見公司名稱
-        company_map = {
-            "tesla": "TSLA", "apple": "AAPL", "amazon": "AMZN",
-            "microsoft": "MSFT", "google": "GOOGL", "nvidia": "NVDA",
-            "meta": "META", "netflix": "NFLX", "amd": "AMD",
-            "intel": "INTC", "coinbase": "COIN"
-        }
-        
-        title_lower = title.lower()
-        for company, ticker in company_map.items():
-            if company in title_lower and ticker not in tickers:
-                tickers.append(ticker)
-        
-        return tickers
+            return {
+                "status": "unhealthy",
+                "error": str(e),
+                "subreddits_monitored": len(self.subreddits)
+            }
